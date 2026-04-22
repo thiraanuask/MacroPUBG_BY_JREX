@@ -1,0 +1,12 @@
+# ไฟล์ Build จาก PyInstaller
+build/
+dist/
+*.spec
+
+# ไฟล์ Executables และ Archive
+*.exe
+*.rar
+
+# โฟลเดอร์แคชของ Python
+__pycache__/
+*.pyc
