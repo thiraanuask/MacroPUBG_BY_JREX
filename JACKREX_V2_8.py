@@ -3,30 +3,73 @@ import threading
 import time
 import win32api
 import win32con
-import win32gui # 🟢 เพิ่ม Library สำหรับจับหน้าต่างเกม
+import win32gui
 import keyboard
 import random
 import os
 import ctypes
-from PIL import Image
+import json 
+from PIL import Image, ImageDraw, ImageFont
+
+# ==========================================
+# --- Configuration Loader ---
+# ==========================================
+CONFIG_FILE = "config.json"
+
+# กำหนดค่าเริ่มต้น (Default) ไว้เผื่อกรณีที่ไม่มีไฟล์ตั้งค่า
+DEFAULT_CONFIG = {
+    "settings": {
+        "default_pull_strength": 5,
+        "first_slot_x": 150,
+        "first_slot_y": 150
+    },
+    "hotkeys": {
+        "toggle_recoil": "o",
+        "master_switch_hex": 0x4C, # รหัสปุ่ม 'L'
+        "loot_key_hex": 0x09       # รหัสปุ่ม 'TAB'
+    }
+}
+
+def load_config():
+    """โหลดไฟล์ตั้งค่า หากไม่มีให้สร้างใหม่"""
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(DEFAULT_CONFIG, f, indent=4)
+        return DEFAULT_CONFIG
+    
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        print("ไฟล์ config.json ผิดพลาด โหลดค่า Default แทน")
+        return DEFAULT_CONFIG
+
+# 🟢 2. โหลด Config เข้ามาเก็บไว้ในตัวแปร
+config = load_config()
 
 # ==========================================
 # --- Core Logic & Window Check ---
 # ==========================================
-PULL_STRENGTH = 5
-RECOIL_ACTIVE = False
 
-LOOT_SYSTEM_ENABLED = False # Master Switch (L)
-LOOT_ACTIVE = False         # สถานะดึงของ (TAB)
+# 🟢 3. นำค่าจาก Config มาใช้แทนการล็อคเลขตายตัว
+PULL_STRENGTH = config["settings"]["default_pull_strength"]
+FIRST_SLOT_X = config["settings"]["first_slot_x"]
+FIRST_SLOT_Y = config["settings"]["first_slot_y"]
+
+HOTKEY_RECOIL = config["hotkeys"]["toggle_recoil"]
+HOTKEY_MASTER_HEX = config["hotkeys"]["master_switch_hex"]
+HOTKEY_LOOT_HEX = config["hotkeys"]["loot_key_hex"]
+
+RECOIL_ACTIVE = False
+LOOT_SYSTEM_ENABLED = False
+LOOT_ACTIVE = False
+IS_HOLDING_GUN = False
 
 LAST_RECOIL_TOGGLE = 0
 LAST_LOOT_TOGGLE = 0
 LAST_L_TOGGLE = 0
 LAST_ADJUST_TIME = 0
-IS_HOLDING_GUN = False # สถานะการถือปืนหลัก
 
-FIRST_SLOT_X = 150  
-FIRST_SLOT_Y = 150  
 
 def is_game_active():
     """🟢 ฟังก์ชันเช็คว่าหน้าต่างที่เปิดอยู่คือ PUBG หรือไม่"""
@@ -63,9 +106,8 @@ def gun_state_worker():
         time.sleep(0.05)
 
 def recoil_worker():
-    global RECOIL_ACTIVE, PULL_STRENGTH, IS_HOLDING_GUN # <--- อย่าลืมดึงตัวแปรมาใช้
+    global RECOIL_ACTIVE, PULL_STRENGTH, IS_HOLDING_GUN 
     while True:
-        # 🟢 เพิ่มเช็คว่าถือปืนอยู่ (IS_HOLDING_GUN) ถึงจะทำงาน
         if is_game_active() and RECOIL_ACTIVE and IS_HOLDING_GUN and win32api.GetAsyncKeyState(0x01) < 0:
             variation = random.uniform(0.9, 1.1)
             final_pull = int(PULL_STRENGTH * variation)
@@ -76,7 +118,6 @@ def recoil_worker():
 def loot_worker():
     global LOOT_ACTIVE
     while True:
-        # 🟢 เพิ่ม is_game_active() ป้องกันเมาส์วาร์ปไปคลิกขวารัวๆ ตอนอยู่หน้า Desktop
         if is_game_active() and LOOT_ACTIVE:
             win32api.SetCursorPos((FIRST_SLOT_X, FIRST_SLOT_Y))
             time.sleep(0.01)
@@ -85,7 +126,7 @@ def loot_worker():
             time.sleep(0.01)
             win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
             
-            time.sleep(random.uniform(0.35, 0.04))
+            time.sleep(random.uniform(0.04, 0.35))
         else:
             time.sleep(0.1)
 
@@ -115,7 +156,7 @@ class JackRexApp(ctk.CTk):
         self.clr_orange = "#F39C12" 
         self.clr_dark   = "#121212"
         self.clr_border = "#1F1F1F"
-
+    
         self.setup_ui()
         self.run_hotkey_loop()
 
@@ -138,22 +179,40 @@ class JackRexApp(ctk.CTk):
         return font_name in tkinter.font.families()
 
     def setup_ui(self):
+        # ==========================================
+        # 🟢 เพิ่ม Background Image ตรงนี้ (สร้างก่อน Widget อื่นๆ)
+        # ==========================================
+        try:
+            bg_file = "watermark.png"
+            bg_path = os.path.join(os.path.dirname(__file__), bg_file)
+            if os.path.exists(bg_path):
+                # โหลดรูปภาพและปรับขนาดให้พอดีกับหน้าต่าง (350x500)
+                pil_img = Image.open(bg_path)
+                bg_image = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(350, 500))
+                
+                # สร้าง Label เป็นพื้นหลังและปรับให้อยู่เต็มจอ (z-index อยู่ล่างสุด)
+                self.bg_label = ctk.CTkLabel(self, image=bg_image, text="")
+                self.bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+        except Exception as e:
+            print(f"Failed to load background image: {e}")
+
         # Header
-        self.logo_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.logo_frame = ctk.CTkFrame(self)
         self.logo_frame.pack(pady=(40, 2))
 
         target_font = "Rubik Glitch" if self.check_font("Rubik Glitch") else "Segoe UI"
 
         self.logo_glow = ctk.CTkLabel(self.logo_frame, text="JACKREX", 
-                                      font=(target_font, 36), text_color="#3A0088")
+                                      font=(target_font, 36), text_color="#3A0088", bg_color="#EBE7E7") 
         self.logo_glow.place(relx=0.5, rely=0.5, anchor="center")
 
         self.logo_label = ctk.CTkLabel(self.logo_frame, text="JACKREX", 
-                                       font=(target_font, 34), text_color=self.clr_purple)
+                                       font=(target_font, 34), text_color=self.clr_purple , bg_color="#ECE9E9")
         self.logo_label.pack()
         
+        # เพิ่ม fg_color="transparent" ที่ Label นี้
         ctk.CTkLabel(self, text="= S M A R T - L O O T =", 
-                     font=("Segoe UI", 9, "bold"), text_color=self.clr_pink).pack(pady=(0, 20))
+                     font=("Segoe UI", 9, "bold"), text_color=self.clr_pink, bg_color="#FFFFFF").pack(pady=(0, 20))
 
         # Recoil Card
         self.recoil_card = ctk.CTkFrame(self, fg_color=self.clr_dark, corner_radius=15, 
@@ -221,34 +280,32 @@ class JackRexApp(ctk.CTk):
         
         try:
             now = time.time()
-            
-            # ปุ่ม END กดยกเลิกสคริปต์ได้เสมอ ไม่ว่าจะอยู่ในเกมหรือไม่
             if keyboard.is_pressed('end'): os._exit(0)
 
-            # 🟢 เช็คว่าต้องอยู่ในเกม PUBG เท่านั้น ปุ่มพวกนี้ถึงจะทำงาน
             if is_game_active():
                 
-                # --- Toggle Recoil (ปุ่ม O สลับเปิดปิด) ---
-                if (keyboard.is_pressed('o') or win32api.GetAsyncKeyState(0x06) < 0) and now - LAST_RECOIL_TOGGLE > 0.3:
+                # 🟢 ใช้ค่าจาก HOTKEY_RECOIL
+                if (keyboard.is_pressed(HOTKEY_RECOIL) or win32api.GetAsyncKeyState(0x06) < 0) and now - LAST_RECOIL_TOGGLE > 0.3:
                     RECOIL_ACTIVE = not RECOIL_ACTIVE
-                    if RECOIL_ACTIVE:
-                        win32api.Beep(1000, 100)
-                        self.recoil_indicator.configure(border_color=self.clr_purple)
-                        self.recoil_stat_txt.configure(text="RECOIL : ACTIVE", text_color=self.clr_purple)
-                    else:
-                        win32api.Beep(500, 100)
-                        self.recoil_indicator.configure(border_color=self.clr_border)
-                        self.recoil_stat_txt.configure(text="RECOIL : STANDBY", text_color="#333333")
                     LAST_RECOIL_TOGGLE = now
 
-                # --- Master Switch (ปุ่ม L) ---
-                if win32api.GetAsyncKeyState(0x4C) or win32api.GetAsyncKeyState(0x05) < 0 and now - LAST_L_TOGGLE > 0.3:
+                # 🟢 ใช้ค่าจาก HOTKEY_MASTER_HEX
+                if win32api.GetAsyncKeyState(HOTKEY_MASTER_HEX) and now - LAST_L_TOGGLE > 0.3:
                     LOOT_SYSTEM_ENABLED = not LOOT_SYSTEM_ENABLED
-                    if not LOOT_SYSTEM_ENABLED:
+                    LAST_L_TOGGLE = now
+
+                # 🟢 ใช้ค่าจาก HOTKEY_LOOT_HEX
+                if LOOT_SYSTEM_ENABLED:
+                    if win32api.GetAsyncKeyState(HOTKEY_LOOT_HEX) < 0 and now - LAST_LOOT_TOGGLE > 0.3:
+                        LOOT_ACTIVE = not LOOT_ACTIVE
+                        LAST_LOOT_TOGGLE = now
+                    
+                    if win32api.GetAsyncKeyState(0x1B) < 0 and LOOT_ACTIVE: # ปุ่ม ESC 
                         LOOT_ACTIVE = False
                         win32api.Beep(400, 100)
                     else:
-                        win32api.Beep(800, 100)
+                        pass
+                        # win32api.Beep(800, 100) # (Optional) Uncomment if needed
                     self.update_loot_ui()
                     LAST_L_TOGGLE = now
 
@@ -278,7 +335,8 @@ class JackRexApp(ctk.CTk):
                     self.recoil_val_lbl.configure(text=str(PULL_STRENGTH))
                     LAST_ADJUST_TIME = now
 
-        except: pass
+        except: 
+            pass
         self.after(50, self.run_hotkey_loop)
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+{
+    "settings": {
+        "default_pull_strength": 5,
+        "first_slot_x": 150,
+        "first_slot_y": 150
+    },
+    "hotkeys": {
+        "toggle_recoil": "o",
+        "master_switch_hex": 76,
+        "loot_key_hex": 9
+    }
+}
